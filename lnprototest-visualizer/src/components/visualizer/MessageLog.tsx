@@ -12,17 +12,17 @@ import {
 import { useStore } from '../../store';
 import { Download, Copy, Trash2 } from 'lucide-react';
 
-interface Message {
+type Message = {
     id: string;
     from: string;
     to: string;
     type: string;
-    content: Record<string, any>;
+    content: Record<string, unknown>;
     timestamp: number;
-}
+};
 
 const MessageLog: React.FC = () => {
-    const messages = useStore(state => state.messages);
+    const messages: Message[] = useStore(state => state.messages);
     const resetLogs = useStore(state => state.resetLogs);
     const logRef = useRef<HTMLDivElement>(null);
     const [filterText, setFilterText] = useState('');
@@ -37,7 +37,7 @@ const MessageLog: React.FC = () => {
         }
     }, [messages, autoScroll]);
 
-    const filteredMessages = messages.filter(msg => {
+    const filteredMessages = messages.filter((msg: Message) => {
         const searchText = filterText.toLowerCase();
         return (
             msg.type.toLowerCase().includes(searchText) ||
@@ -77,6 +77,8 @@ const MessageLog: React.FC = () => {
 
     const getMessageStatusColor = (type: string) => {
         switch (type.toLowerCase()) {
+            case 'raw':
+                return 'info';
             case 'error':
                 return 'error';
             case 'warning':
@@ -100,11 +102,11 @@ const MessageLog: React.FC = () => {
                         <TextFilter
                             filteringText={filterText}
                             onChange={({ detail }) => setFilterText(detail.filteringText)}
-                            placeholder="Filter messages..."
+                            filteringPlaceholder="Filter messages..."
                             countText={`${filteredMessages.length} matches`}
                         />
                     </SpaceBetween>
-                    <SpaceBetween direction="horizontal" size="xs">
+                    {/* <SpaceBetween direction="horizontal" size="xs">
                         <Toggle
                             onChange={({ detail }) => setAutoScroll(detail.checked)}
                             checked={autoScroll}
@@ -122,25 +124,22 @@ const MessageLog: React.FC = () => {
                         <Button
                             iconAlign="left"
                             onClick={downloadLogs}
-                            icon={<Download size={16} />}
                         >
-                            Download
+                            <Download size={16} style={{ marginRight: 4 }} />Download
                         </Button>
                         <Button
                             iconAlign="left"
                             onClick={copyToClipboard}
-                            icon={<Copy size={16} />}
                         >
-                            Copy
+                            <Copy size={16} style={{ marginRight: 4 }} />Copy
                         </Button>
                         <Button
                             iconAlign="left"
                             onClick={resetLogs}
-                            icon={<Trash2 size={16} />}
                         >
-                            Clear
+                            <Trash2 size={16} style={{ marginRight: 4 }} />Clear
                         </Button>
-                    </SpaceBetween>
+                    </SpaceBetween> */}
                 </ColumnLayout>
 
                 {/* Message Log */}
@@ -167,6 +166,16 @@ const MessageLog: React.FC = () => {
                                         )}
                                         <StatusIndicator type={getMessageStatusColor(msg.type)}>
                                             {msg.type.toUpperCase()}
+                                            {msg.type.toLowerCase() === 'raw' && (
+                                                <span style={{
+                                                    marginLeft: 4,
+                                                    padding: '0 4px',
+                                                    background: '#e5e7eb',
+                                                    borderRadius: 4,
+                                                    fontSize: 10,
+                                                    color: '#374151'
+                                                }}>RAW</span>
+                                            )}
                                         </StatusIndicator>
                                         <span className={msg.from === 'runner' ? 'text-blue-600' : 'text-yellow-600'}>
                                             {msg.from.toUpperCase()}

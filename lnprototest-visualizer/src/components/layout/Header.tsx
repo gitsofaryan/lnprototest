@@ -50,7 +50,7 @@ const Header: React.FC = () => {
       variant="h1"
       actions={
         <SpaceBetween direction="horizontal" size="xs">
-          <ButtonDropdown
+          {/* <ButtonDropdown
             items={[
               { id: 'ldk', text: 'LDK' },
               { id: 'c-lightning', text: 'c-lightning' },
@@ -58,21 +58,21 @@ const Header: React.FC = () => {
             ]}
           >
             Implementation: LDK
-          </ButtonDropdown>
-          <Button
+          </ButtonDropdown> */}
+          {/* <Button
             variant={connectionButtonVariant}
             onClick={handleConnectionToggle}
             iconName={connectionState === 'connected' ? 'close' : 'add-plus'}
           >
             {connectionButtonText}
-          </Button>
+          </Button> */}
         </SpaceBetween>
       }
     >
-      <div className="flex items-center">
+      {/* <div className="flex items-center">
         <Zap className="mr-2 text-yellow-400" size={24} />
         {getTitle()}
-      </div>
+      </div> */}
     </CloudscapeHeader>
   );
 };

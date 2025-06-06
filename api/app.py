@@ -12,6 +12,11 @@ from lnprototest.event import Msg, ExpectMsg, Connect
 from lnprototest.runner import Conn
 import re
 import traceback
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Create a mock config class to satisfy Runner's expectations
 class MockConfig:
@@ -158,20 +163,73 @@ def connect():
 def raw_msg():
     """Send a single raw message to the other node"""
     try:
-        data = request.json
-        if not data or 'msg' not in data or 'type' not in data:
+        # Handle OPTIONS request for CORS
+        if request.method == 'OPTIONS':
+            return '', 204
+
+        # Debug logging
+        logger.info("=== Request Details ===")
+        logger.info(f"Method: {request.method}")
+        logger.info(f"Headers: {dict(request.headers)}")
+        logger.info(f"Raw Data: {request.get_data(as_text=True)}")
+        logger.info("=====================")
+
+        # Check Content-Type header
+        if not request.is_json:
+            logger.error("Content-Type error: Not application/json")
             return jsonify({
-                'error': 'Invalid request format. Required fields: msg, type',
+                'error': 'Content-Type must be application/json',
+                'type': 'UnsupportedMediaType'
+            }), 415
+
+        # Get JSON data with error handling
+        try:
+            data = request.get_json()
+            logger.info(f"Parsed JSON data: {data}")
+        except Exception as e:
+            logger.error(f"JSON parsing error: {str(e)}")
+            return jsonify({
+                'error': 'Invalid JSON format',
+                'type': 'InvalidJSON',
+                'details': str(e)
+            }), 400
+
+        # Handle both message formats
+        msg_type = data.get('msg') or data.get('type')
+        if not msg_type:
+            logger.error("Missing message type")
+            return jsonify({
+                'error': 'Missing message type. Either "msg" or "type" field is required',
                 'type': 'ValidationError'
             }), 400
 
-        # Create message with all provided fields
-        msg_content = {k: v for k, v in data.items() if k != 'msg'}
-        messages = handle_message_flow(data['msg'], msg_content)
+        # --- PASSTHROUGH FOR UNKNOWN TYPES ---
+        known_types = {"init", "ping", "pong", "error", "open_channel", "accept_channel", "funding_created", "commitment_signed", "revoke_and_ack", "channel_announcement", "node_announcement", "channel_update"}
+        if msg_type not in known_types:
+            msg = {
+                "from": "runner",
+                "to": "ldk",
+                "type": "raw",
+                "content": data,
+                "timestamp": int(time.time() * 1000)
+            }
+            return jsonify({'messages': [msg]})
+
+        # Extract content - either from content object or root level
+        content = {}
+        if 'content' in data and isinstance(data['content'], dict):
+            content = data['content']
+        else:
+            # Extract all fields except 'msg' and 'type' as content
+            content = {k: v for k, v in data.items() if k not in ['msg', 'type']}
+
+        # Send message and get response
+        messages = handle_message_flow(msg_type, content)
         return jsonify({'messages': messages})
+
     except Exception as e:
-        print(f"Error in raw_msg: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Error in raw_msg: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({
             'error': str(e),
             'type': type(e).__name__
@@ -180,12 +238,15 @@ def raw_msg():
 @app.route('/messages', methods=['GET'])
 def get_messages():
     try:
-        # Assuming runner.get_logs() returns a list of messages
-        logs = runner.get_logs() if hasattr(runner, 'get_logs') else []
+        logs = []
+        if hasattr(runner, 'get_logs'):
+            logs = runner.get_logs()
+            if not isinstance(logs, list):
+                logs = []
         return jsonify({'messages': logs})
     except Exception as e:
         print(f"Error in get_messages: {str(e)}")
-        return jsonify({'error': str(e), 'type': type(e).__name__}), 500
+        return jsonify({'messages': []}), 200
 
 if __name__ == '__main__':
     try:

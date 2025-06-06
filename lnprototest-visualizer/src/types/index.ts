@@ -91,3 +91,10 @@ export interface FlaskMessage {
   timestamp: number;
   type: string;
 }
+
+export interface MessageFlowType {
+  id: string;
+  direction: 'sent' | 'received';
+  type: MessageType;
+  status: 'pending' | 'success' | 'error';
+}

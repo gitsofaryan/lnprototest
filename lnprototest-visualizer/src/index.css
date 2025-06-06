@@ -147,3 +147,8 @@ body {
   background-size: 20px 2px;
   animation: connectionLine 1s linear infinite;
 }
+
+.wide-modal .awsui_modal-content {
+  min-width: 600px;
+  max-width: 900px;
+}

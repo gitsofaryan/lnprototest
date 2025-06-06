@@ -8,7 +8,7 @@ import SettingsPage from './pages/SettingsPage';
 import DocsPage from './pages/DocsPage';
 
 function App() {
-  const [navigationOpen, setNavigationOpen] = React.useState(true);
+  const [navigationOpen, setNavigationOpen] = React.useState(false);
 
   return (
     <AppLayout
