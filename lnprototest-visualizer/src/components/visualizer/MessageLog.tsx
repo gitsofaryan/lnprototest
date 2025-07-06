@@ -1,53 +1,73 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     Box,
-    Button,
-    ColumnLayout,
     SpaceBetween,
-    TextFilter,
     Toggle,
-    StatusIndicator,
-    Link
+    Input,
+    Button,
+    Container,
+    Header,
+    Alert,
+    Badge
 } from '@cloudscape-design/components';
 import { useStore } from '../../store';
-import { Download, Copy, Trash2 } from 'lucide-react';
+import { MessageFlowEvent } from '../../api/websocket';
+import { Copy, Download, Trash2, Eye, EyeOff } from 'lucide-react';
 
-type Message = {
-    id: string;
-    from: string;
-    to: string;
-    type: string;
-    content: Record<string, unknown>;
-    timestamp: number;
+const formatTimestamp = (timestamp: number): string => {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+    }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
 };
 
 const MessageLog: React.FC = () => {
-    const messages: Message[] = useStore(state => state.messages);
-    const resetLogs = useStore(state => state.resetLogs);
-    const logRef = useRef<HTMLDivElement>(null);
-    const [filterText, setFilterText] = useState('');
     const [autoScroll, setAutoScroll] = useState(true);
     const [showTimestamps, setShowTimestamps] = useState(true);
+    const [searchText, setSearchText] = useState('');
+    const [copySuccess, setCopySuccess] = useState(false);
     const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
+    const messages = useStore(state => state.messages);
+    const messagesEndRef = useRef<HTMLDivElement>(null);
 
-    // Auto-scroll when new messages arrive
+    // Auto-scroll to bottom when new messages arrive
     useEffect(() => {
-        if (autoScroll && logRef.current) {
-            logRef.current.scrollTop = logRef.current.scrollHeight;
+        if (autoScroll && messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
         }
     }, [messages, autoScroll]);
 
-    const filteredMessages = messages.filter((msg: Message) => {
-        const searchText = filterText.toLowerCase();
-        return (
-            msg.type.toLowerCase().includes(searchText) ||
-            msg.from.toLowerCase().includes(searchText) ||
-            msg.to.toLowerCase().includes(searchText) ||
-            JSON.stringify(msg.content).toLowerCase().includes(searchText)
-        );
-    });
+    const handleDownload = () => {
+        const data = JSON.stringify(messages, null, 2);
+        const blob = new Blob([data], { type: 'application/json' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `lightning-messages-${new Date().toISOString().split('T')[0]}.json`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+    };
 
-    const toggleMessageExpand = (messageId: string) => {
+    const handleCopy = async () => {
+        try {
+            const data = JSON.stringify(messages, null, 2);
+            await navigator.clipboard.writeText(data);
+            setCopySuccess(true);
+            setTimeout(() => setCopySuccess(false), 2000);
+        } catch (err) {
+            console.error('Failed to copy to clipboard:', err);
+        }
+    };
+
+    const handleClear = () => {
+        useStore.getState().clearMessages();
+        setExpandedMessages(new Set());
+    };
+
+    const toggleMessageExpansion = (messageId: string) => {
         const newExpanded = new Set(expandedMessages);
         if (newExpanded.has(messageId)) {
             newExpanded.delete(messageId);
@@ -57,152 +77,182 @@ const MessageLog: React.FC = () => {
         setExpandedMessages(newExpanded);
     };
 
-    const downloadLogs = () => {
-        const logData = JSON.stringify(messages, null, 2);
-        const blob = new Blob([logData], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `lightning-message-log-${new Date().toISOString()}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+    const getMessageColor = (direction: string) => {
+        return direction === 'out' ? 'text-blue-600' : 'text-green-600';
     };
 
-    const copyToClipboard = () => {
-        const logData = JSON.stringify(messages, null, 2);
-        navigator.clipboard.writeText(logData);
+    const getDirectionIcon = (direction: string) => {
+        return direction === 'out' ? '→' : '←';
     };
 
-    const getMessageStatusColor = (type: string) => {
-        switch (type.toLowerCase()) {
-            case 'raw':
-                return 'info';
-            case 'error':
-                return 'error';
-            case 'warning':
-                return 'warning';
-            case 'init':
-                return 'info';
-            case 'ping':
-            case 'pong':
-                return 'success';
-            default:
-                return 'info';
+    const getStepBadge = (message: MessageFlowEvent) => {
+        if (message.step) {
+            return (
+                <Badge color="blue">
+                    Step {message.step}
+                </Badge>
+            );
         }
+        return null;
     };
+
+    const renderMessage = (message: MessageFlowEvent, index: number) => {
+        const messageId = `${message.sequence_id || 'raw'}-${message.timestamp}-${index}`;
+        const isExpanded = expandedMessages.has(messageId);
+        const timestamp = showTimestamps ? formatTimestamp(message.timestamp) : '';
+        const directionIcon = getDirectionIcon(message.direction);
+        const messageColor = getMessageColor(message.direction);
+        const fromNode = message.direction === 'out' ? 'RUNNER' : 'LDK';
+        const toNode = message.direction === 'out' ? 'LDK' : 'RUNNER';
+
+        return (
+            <div
+                key={messageId}
+                className="message-item border-l-4 border-gray-200 hover:border-blue-300 bg-white rounded-lg p-4 mb-3 shadow-sm hover:shadow-md transition-all duration-200"
+            >
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        {showTimestamps && (
+                            <span className="text-xs text-gray-500 font-mono bg-gray-100 px-2 py-1 rounded">
+                                {timestamp}
+                            </span>
+                        )}
+                        {getStepBadge(message)}
+                        <div className="flex items-center gap-2">
+                            <span className={`font-semibold ${messageColor}`}>
+                                {message.event}
+                            </span>
+                            <span className="text-sm text-gray-600">
+                                <span className="font-medium text-blue-600">{fromNode}</span>
+                                <span className="mx-2 text-gray-400">{directionIcon}</span>
+                                <span className="font-medium text-green-600">{toNode}</span>
+                            </span>
+                        </div>
+                    </div>
+                    <Button
+                        onClick={() => toggleMessageExpansion(messageId)}
+                        variant="icon"
+                        className="text-gray-500 hover:text-gray-700"
+                    >
+                        {isExpanded ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </Button>
+                </div>
+
+                {isExpanded && (
+                    <div className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-3">
+                        <div className="text-xs text-gray-500 mb-2">Message Data:</div>
+                        <pre className="text-sm font-mono text-gray-800 whitespace-pre-wrap overflow-x-auto">
+                            {JSON.stringify(message.data, null, 2)}
+                        </pre>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    const filteredMessages = messages.filter(msg => {
+        if (!searchText) return true;
+        const searchLower = searchText.toLowerCase();
+        return (
+            msg.event.toLowerCase().includes(searchLower) ||
+            JSON.stringify(msg.data).toLowerCase().includes(searchLower) ||
+            (msg.sequence_id && msg.sequence_id.toLowerCase().includes(searchLower))
+        );
+    });
 
     return (
-        <Box>
-            <SpaceBetween size="s">
-                {/* Controls */}
-                <ColumnLayout columns={3} variant="text-grid">
-                    <SpaceBetween direction="horizontal" size="xs">
-                        <TextFilter
-                            filteringText={filterText}
-                            onChange={({ detail }) => setFilterText(detail.filteringText)}
-                            filteringPlaceholder="Filter messages..."
-                            countText={`${filteredMessages.length} matches`}
+        <Container
+            header={
+                <Header
+                    variant="h3"
+                    description={`${messages.length} message${messages.length !== 1 ? 's' : ''} logged`}
+                    actions={
+                        <SpaceBetween direction="horizontal" size="xs">
+                            <Button
+                                onClick={handleDownload}
+                                variant="normal"
+                            >
+                                <Download size={16} style={{ marginRight: '4px' }} />
+                                {/* Export */}
+                            </Button>
+                            <Button
+                                onClick={handleCopy}
+                                variant="normal"
+                            >
+                                <Copy size={16} style={{ marginRight: '4px' }} />
+                                {/* {copySuccess ? 'Copied!' : 'Copy'} */}
+                            </Button>
+                            <Button
+                                onClick={handleClear}
+                                variant="normal"
+                                disabled={messages.length === 0}
+                            >
+                                <Trash2 size={16} style={{ marginRight: '4px' }} />
+                                {/* Clear */}
+                            </Button>
+                        </SpaceBetween>
+                    }
+                >
+                    Lightning Network Message Log
+                </Header>
+            }
+        >
+            <SpaceBetween size="m">
+                {copySuccess && (
+                    <Alert type="success" dismissible onDismiss={() => setCopySuccess(false)}>
+                        Messages copied to clipboard!
+                    </Alert>
+                )}
+
+                <Box>
+                    <SpaceBetween direction="horizontal" size="s">
+                        <Input
+                            value={searchText}
+                            type="search"
+                            placeholder="Search messages, events, or data..."
+                            onChange={({ detail }) => setSearchText(detail.value)}
+                            clearAriaLabel="Clear search"
                         />
-                    </SpaceBetween>
-                    {/* <SpaceBetween direction="horizontal" size="xs">
                         <Toggle
-                            onChange={({ detail }) => setAutoScroll(detail.checked)}
                             checked={autoScroll}
+                            onChange={({ detail }) => setAutoScroll(detail.checked)}
                         >
                             Auto-scroll
                         </Toggle>
                         <Toggle
-                            onChange={({ detail }) => setShowTimestamps(detail.checked)}
                             checked={showTimestamps}
+                            onChange={({ detail }) => setShowTimestamps(detail.checked)}
                         >
-                            Show timestamps
+                            Timestamps
                         </Toggle>
                     </SpaceBetween>
-                    <SpaceBetween direction="horizontal" size="xs">
-                        <Button
-                            iconAlign="left"
-                            onClick={downloadLogs}
-                        >
-                            <Download size={16} style={{ marginRight: 4 }} />Download
-                        </Button>
-                        <Button
-                            iconAlign="left"
-                            onClick={copyToClipboard}
-                        >
-                            <Copy size={16} style={{ marginRight: 4 }} />Copy
-                        </Button>
-                        <Button
-                            iconAlign="left"
-                            onClick={resetLogs}
-                        >
-                            <Trash2 size={16} style={{ marginRight: 4 }} />Clear
-                        </Button>
-                    </SpaceBetween> */}
-                </ColumnLayout>
+                </Box>
 
-                {/* Message Log */}
-                <div
-                    ref={logRef}
-                    className="bg-white border border-gray-200 rounded-md p-2 h-[300px] overflow-y-auto message-log"
-                >
-                    {filteredMessages.length === 0 ? (
-                        <div className="text-xs text-gray-500 text-center py-4">
-                            {filterText ? 'No messages match the filter' : 'No messages exchanged yet'}
-                        </div>
-                    ) : (
-                        filteredMessages.map((msg) => (
-                            <div
-                                key={msg.id}
-                                className="text-xs mb-2 p-2 rounded hover:bg-gray-50 transition-colors"
-                            >
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center space-x-2">
-                                        {showTimestamps && (
-                                            <span className="text-gray-500">
-                                                {new Date(msg.timestamp).toLocaleTimeString()}
-                                            </span>
-                                        )}
-                                        <StatusIndicator type={getMessageStatusColor(msg.type)}>
-                                            {msg.type.toUpperCase()}
-                                            {msg.type.toLowerCase() === 'raw' && (
-                                                <span style={{
-                                                    marginLeft: 4,
-                                                    padding: '0 4px',
-                                                    background: '#e5e7eb',
-                                                    borderRadius: 4,
-                                                    fontSize: 10,
-                                                    color: '#374151'
-                                                }}>RAW</span>
-                                            )}
-                                        </StatusIndicator>
-                                        <span className={msg.from === 'runner' ? 'text-blue-600' : 'text-yellow-600'}>
-                                            {msg.from.toUpperCase()}
-                                        </span>
-                                        <span>→</span>
-                                        <span className={msg.to === 'runner' ? 'text-blue-600' : 'text-yellow-600'}>
-                                            {msg.to.toUpperCase()}
-                                        </span>
-                                    </div>
-                                    <Link
-                                        onFollow={() => toggleMessageExpand(msg.id)}
-                                        variant="info"
-                                    >
-                                        {expandedMessages.has(msg.id) ? 'Collapse' : 'Expand'}
-                                    </Link>
-                                </div>
-                                {expandedMessages.has(msg.id) && (
-                                    <pre className="mt-2 p-2 bg-gray-50 rounded text-xs overflow-x-auto">
-                                        {JSON.stringify(msg.content, null, 2)}
-                                    </pre>
-                                )}
+                <Box>
+                    <div
+                        className="message-log-container"
+                        style={{
+                            maxHeight: '500px',
+                            overflowY: 'auto',
+                            padding: '8px',
+                            backgroundColor: '#f8fafc',
+                            borderRadius: '8px'
+                        }}
+                    >
+                        {filteredMessages.length === 0 ? (
+                            <div className="text-center text-gray-500 py-8">
+                                {searchText ? 'No messages match your search.' : 'No messages yet. Start by connecting!'}
                             </div>
-                        ))
-                    )}
-                </div>
+                        ) : (
+                            <>
+                                {filteredMessages.map(renderMessage)}
+                                <div ref={messagesEndRef} />
+                            </>
+                        )}
+                    </div>
+                </Box>
             </SpaceBetween>
-        </Box>
+        </Container>
     );
 };
 

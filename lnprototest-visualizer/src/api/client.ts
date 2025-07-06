@@ -1,164 +1,89 @@
-// Base API URL - this would be configured from environment or settings
-const API_BASE_URL = 'http://localhost:5000';
-
-// Helper function for fetch requests
-async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = 5000): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-  
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-    return response;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    throw error;
-  }
-}
+import { webSocketService, MessageFlowEvent } from "./websocket";
+import api from "./api";
 
 export interface MessageResponse {
-  messages: Array<{
-    from: string;
-    to: string;
-    type: string;
-    content: Record<string, any>;
-  }>;
+  messages: MessageFlowEvent[];
 }
 
-// API Client
+export interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+}
+
+// API Client for minimal endpoints
 export const apiClient = {
-  // Health check
-  async getHealth(): Promise<ApiResponse<any>> {
+  // Connect endpoint - runs Vincent's 7-step sequence
+  async connect(): Promise<MessageResponse> {
     try {
-      const response = await fetchWithTimeout(`${API_BASE_URL}/health`);
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      return await response.json();
-    } catch (error) {
-      console.error('Error checking health:', error);
+      const response = await api.connect();
       return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
-    }
-  },
-
-  // Node operations
-  async createNode(): Promise<ApiResponse<FlaskNode>> {
-    try {
-      const response = await fetchWithTimeout(
-        `${API_BASE_URL}/nodes`,
-        { 
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      return { success: true, data: await response.json() };
-    } catch (error) {
-      console.error('Error creating node:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
-    }
-  },
-
-  // Connection operations
-  async createConnection(sourceNodeId: string, targetNodeId: string): Promise<ApiResponse<FlaskConnection>> {
-    try {
-      const response = await fetchWithTimeout(
-        `${API_BASE_URL}/connections`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
+        messages: [
+          {
+            direction: "out" as const,
+            event: "sequence_started",
+            data: {
+              status: response.status,
+              sequence_id: response.sequence_id,
+              node_id: response.node_id,
+              steps_completed: response.steps_completed,
+            },
+            timestamp: Date.now(),
           },
-          body: JSON.stringify({ sourceNodeId, targetNodeId })
-        }
-      );
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      return { success: true, data: await response.json() };
-    } catch (error) {
-      console.error('Error creating connection:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        ],
       };
+    } catch (error) {
+      console.error("Error in connect:", error);
+      throw error;
     }
   },
 
-  // Message operations
-  async sendInit(connectionId: string): Promise<ApiResponse<FlaskMessage>> {
+  // Send raw message
+  async sendMessage(
+    type: string,
+    content: Record<string, unknown> = {}
+  ): Promise<MessageResponse> {
     try {
-      const response = await fetchWithTimeout(
-        `${API_BASE_URL}/send-init`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
+      await api.sendMessage(type, content);
+      return {
+        messages: [
+          {
+            direction: "out" as const,
+            event: "raw_message",
+            data: { type, content },
+            timestamp: Date.now(),
           },
-          body: JSON.stringify({ 
-            connectionId,
-            globalfeatures: "00",
-            features: "01"
-          })
-        }
-      );
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      return { success: true, data: await response.json() };
-    } catch (error) {
-      console.error('Error sending init message:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        ],
       };
+    } catch (error) {
+      console.error("Error sending message:", error);
+      throw error;
     }
   },
 
-  async getMessageFlow(connectionId: string): Promise<ApiResponse<FlaskMessage[]>> {
-    try {
-      const response = await fetchWithTimeout(`${API_BASE_URL}/message-flow/${connectionId}`);
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      return { success: true, data: await response.json() };
-    } catch (error) {
-      console.error('Error getting message flow:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
-    }
+  // WebSocket management
+  async connectWebSocket(): Promise<void> {
+    return webSocketService.connect();
   },
 
-  connect: async () => {
-    const response = await fetch(`${API_BASE_URL}/connect`, {
-      method: 'POST'
-    });
-    return response.json() as Promise<MessageResponse>;
+  async runConnectSequence(nodeId: string = "03"): Promise<void> {
+    return webSocketService.runConnect(nodeId);
   },
 
-  sendMessage: async (type: string, content?: Record<string, any>) => {
-    const response = await fetch(`${API_BASE_URL}/raw-msg`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ type, content })
-    });
-    return response.json() as Promise<MessageResponse>;
-  }
+  disconnect(): void {
+    return webSocketService.disconnect();
+  },
+
+  // WebSocket event handlers
+  onMessage(handler: (event: MessageFlowEvent) => void): () => void {
+    return webSocketService.onMessage(handler);
+  },
+
+  onError(handler: (error: { error: string }) => void): () => void {
+    return webSocketService.onError(handler);
+  },
+
+  onComplete(handler: () => void): () => void {
+    return webSocketService.onComplete(handler);
+  },
 };

@@ -7,6 +7,7 @@ import io
 import struct
 import time
 import json
+import asyncio
 
 from typing import Optional, Dict, Union, Callable, Any, List, TYPE_CHECKING, overload
 
@@ -40,7 +41,7 @@ class Event(object):
         #   Each item in the list is a quadruple (filename,
         #   line number, function name, text), and the entries are in order
         #   from oldest to newest stack frame.
-        self.name = "unknown"
+        self.name = self.__class__.__name__
         for s in reversed(traceback.extract_stack()):
             # Ignore constructor calls, like this one.
             if s[2] != "__init__":
@@ -54,9 +55,10 @@ class Event(object):
         return True
 
     def action(self, runner: "Runner") -> bool:
-        """action() returns the False if it needs to be called again"""
-        if runner.config.getoption("verbose"):
-            logging.info("# running {}:".format(self.to_json()))
+        """Execute this event, return True if we're done with this sequence"""
+        # Broadcast event through WebSocket if enabled
+        if hasattr(runner, 'broadcast_event'):
+            asyncio.run(runner.broadcast_event(self, "out", {}))
         return True
 
     def resolve_arg(self, fieldname: str, runner: "Runner", arg: Resolvable) -> Any:
@@ -198,6 +200,9 @@ class Msg(PerConnEvent):
         message.write(binmsg)
         runner.recv(self, self.find_conn(runner), binmsg.getvalue())
         msg_to_stash(runner, self, message)
+        # Broadcast message through WebSocket if enabled
+        if hasattr(runner, 'broadcast_event'):
+            asyncio.run(runner.broadcast_event(self, "out", self.kwargs))
         return True
 
 
@@ -377,6 +382,9 @@ class ExpectMsg(PerConnEvent):
                 raise EventError(self, "{}: message was {}".format(err, msg.to_str()))
 
             break
+        # Broadcast expect message through WebSocket if enabled
+        if hasattr(runner, 'broadcast_event'):
+            asyncio.run(runner.broadcast_event(self, "in", {"msgtype": self.msgtype}))
         return True
 
 

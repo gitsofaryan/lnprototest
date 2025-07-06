@@ -10,7 +10,6 @@ import {
   TextFilter
 } from '@cloudscape-design/components';
 import { useStore } from '../../store';
-import { MessageCategory, AvailableMessage } from '../../store';
 
 const MessageList: React.FC = () => {
   const availableMessages = useStore(state => state.availableMessages);
@@ -20,7 +19,7 @@ const MessageList: React.FC = () => {
   const connected = useStore(state => state.connected);
 
   const [filterText, setFilterText] = useState('');
-  const [activeCategory, setActiveCategory] = useState<MessageCategory | 'all'>('all');
+  const [activeCategory, setActiveCategory] = useState('all');
 
   const filteredMessages = availableMessages.filter(message => {
     const matchesFilter = message.name.toLowerCase().includes(filterText.toLowerCase()) ||
@@ -50,42 +49,44 @@ const MessageList: React.FC = () => {
     >
       <SpaceBetween size="l">
         <Tabs
-          tabs={[
-            {
-              id: 'all',
-              label: 'All',
-              content: (
-                <Box padding={{ top: 'l' }}>
-                  <TextFilter
-                    filteringText={filterText}
-                    onChange={({ detail }) => setFilterText(detail.filteringText)}
-                    placeholder="Find messages"
-                  />
-                </Box>
-              )
-            },
-            {
-              id: 'connection',
-              label: 'Connection',
-              content: null
-            },
-            {
-              id: 'channel',
-              label: 'Channel',
-              content: null
-            },
-            {
-              id: 'commitment',
-              label: 'Commitment',
-              content: null
-            },
-            {
-              id: 'routing',
-              label: 'Routing',
-              content: null
-            }
-          ]}
-          onChange={({ detail }) => setActiveCategory(detail.activeTabId as MessageCategory | 'all')}
+          tabs={
+            [
+              {
+                id: 'all',
+                label: 'All',
+                content: (
+                  <Box padding={{ top: 'l' }}>
+                    <TextFilter
+                      filteringText={filterText}
+                      onChange={({ detail }) => setFilterText(detail.filteringText)}
+                      filteringPlaceholder="Find messages"
+                    />
+                  </Box>
+                )
+              },
+              {
+                id: 'connection',
+                label: 'Connection',
+                content: null
+              },
+              {
+                id: 'channel',
+                label: 'Channel',
+                content: null
+              },
+              {
+                id: 'commitment',
+                label: 'Commitment',
+                content: null
+              },
+              {
+                id: 'routing',
+                label: 'Routing',
+                content: null
+              }
+            ]
+          }
+          onChange={({ detail }) => setActiveCategory(detail.activeTabId)}
         />
 
         <Table
@@ -94,26 +95,28 @@ const MessageList: React.FC = () => {
           selectionType="single"
           selectedItems={selectedMessage ? [selectedMessage] : []}
           onSelectionChange={({ detail }) => {
-            selectMessage(detail.selectedItems[0] as AvailableMessage);
+            selectMessage(detail.selectedItems[0]);
           }}
-          columnDefinitions={[
-            {
-              id: 'name',
-              header: 'Message',
-              cell: item => item.name,
-              sortingField: 'name'
-            },
-            {
-              id: 'description',
-              header: 'Description',
-              cell: item => item.description
-            },
-            {
-              id: 'category',
-              header: 'Category',
-              cell: item => item.category.charAt(0).toUpperCase() + item.category.slice(1)
-            }
-          ]}
+          columnDefinitions={
+            [
+              {
+                id: 'name',
+                header: 'Message',
+                cell: item => item.name,
+                sortingField: 'name'
+              },
+              {
+                id: 'description',
+                header: 'Description',
+                cell: item => item.description
+              },
+              {
+                id: 'category',
+                header: 'Category',
+                cell: item => item.category.charAt(0).toUpperCase() + item.category.slice(1)
+              }
+            ]
+          }
           empty={
             <Box textAlign="center" color="inherit">
               <b>No messages</b>

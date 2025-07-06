@@ -2,6 +2,7 @@
 import logging
 import shutil
 import tempfile
+import asyncio
 
 import coincurve
 import functools
@@ -47,10 +48,28 @@ class Runner(ABC):
         self.last_conn: Optional[Conn] = None
         self.stash: Dict[str, Dict[str, Any]] = {}
         self.logger = logging.getLogger(__name__)
+        self.websocket_server = None
         if self.config.getoption("verbose"):
             self.logger.setLevel(logging.DEBUG)
         else:
             self.logger.setLevel(logging.INFO)
+
+    async def setup_websocket(self):
+        """Setup WebSocket server if enabled"""
+        if self.config.getoption("websocket"):
+            from .websocket_server import WebSocketServer
+            self.websocket_server = WebSocketServer()
+            await self.websocket_server.start()
+
+    async def teardown_websocket(self):
+        """Stop WebSocket server if running"""
+        if self.websocket_server:
+            await self.websocket_server.stop()
+
+    async def broadcast_event(self, event: Event, direction: str, payload: Dict[str, Any]):
+        """Broadcast an event through WebSocket if enabled"""
+        if self.websocket_server:
+            await self.websocket_server.broadcast_event(event, direction, payload)
 
     def _is_dummy(self) -> bool:
         """The DummyRunner returns True here, as it can't do some things"""
@@ -92,17 +111,26 @@ class Runner(ABC):
         self.last_conn = None
         self.stash = {}
 
-    # FIXME: Why can't we use SequenceUnion here?
     def run(self, events: Union[Sequence, List[Event], Event]) -> None:
         sequence = Sequence(events)
         self.start()
-        while True:
-            all_done = sequence.action(self)
-            self.post_check(sequence)
-            if all_done:
-                self.stop()
-                return
-            self.restart()
+        
+        # Setup WebSocket server if enabled
+        if self.config.getoption("websocket"):
+            asyncio.run(self.setup_websocket())
+        
+        try:
+            while True:
+                all_done = sequence.action(self)
+                self.post_check(sequence)
+                if all_done:
+                    self.stop()
+                    return
+                self.restart()
+        finally:
+            # Cleanup WebSocket server
+            if self.config.getoption("websocket"):
+                asyncio.run(self.teardown_websocket())
 
     def add_stash(self, stashname: str, vals: Any) -> None:
         """Add a dict to the stash."""

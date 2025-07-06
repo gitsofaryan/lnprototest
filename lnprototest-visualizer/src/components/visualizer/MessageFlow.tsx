@@ -1,11 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import ReactFlow, {
   Background,
   Controls,
-  Edge,
   Node,
+  Edge,
   Position,
-  EdgeLabelRenderer
+  Handle,
+  Connection,
+  addEdge,
+  NodeProps,
+  useNodesState,
+  useEdgesState,
+  ReactFlowProvider
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import {
@@ -14,34 +20,80 @@ import {
   Box,
   SpaceBetween,
   Button,
-  Select,
   Modal,
   FormField,
   Input,
   Textarea
 } from '@cloudscape-design/components';
-import { Zap } from 'lucide-react';
 import { useStore } from '../../store';
+import { MessageFlowEvent } from '../../api/websocket';
 import MessageLog from './MessageLog';
+import { Zap } from 'lucide-react';
+import { apiClient } from '../../api/client';
 
-// Custom Node Component
-const CustomNode = ({ data }: { data: { label: string; type: string; isConnected: boolean } }) => {
+interface CustomNodeData {
+  label: string;
+  type: string;
+  isConnected: boolean;
+}
+
+const CustomNode: React.FC<NodeProps<CustomNodeData>> = ({ data }) => {
   return (
     <div
-      className={`flex flex-col items-center justify-center p-2 rounded-lg border shadow-md bg-white/80
-        ${data.type === 'runner' ? 'border-blue-500' : 'border-yellow-500'}
-        ${data.isConnected ? 'node-connected' : ''}`}
-      style={{ pointerEvents: 'all', zIndex: 2 }}
+      className={`flex flex-col items-center justify-center p-4 rounded-xl border-2 shadow-lg bg-white transition-all duration-500
+        ${data.type === 'runner' ? 'border-blue-500 hover:border-blue-600' : 'border-yellow-500 hover:border-yellow-600'}
+        ${data.isConnected ? 'shadow-xl animate-pulse' : 'opacity-75'}`}
+      style={{
+        minWidth: '140px',
+        minHeight: '120px',
+        pointerEvents: 'all',
+        transform: data.isConnected ? 'translateY(-2px)' : 'translateY(0px)',
+        animation: data.isConnected ? 'float 3s ease-in-out infinite' : 'none'
+      }}
     >
-      <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-2 
-        ${data.type === 'runner' ? 'bg-blue-100' : 'bg-yellow-100'}`}
+      <style dangerouslySetInnerHTML={{
+        __html: `
+          @keyframes float {
+            0%, 100% { transform: translateY(-2px); }
+            50% { transform: translateY(-6px); }
+          }
+        `
+      }} />
+
+      <div className={`w-14 h-14 rounded-full flex items-center justify-center mb-3 transition-all duration-300
+        ${data.type === 'runner' ? 'bg-blue-100 text-blue-600' : 'bg-yellow-100 text-yellow-600'}
+        ${data.isConnected ? 'scale-110' : 'scale-100'}`}
       >
-        <Zap size={24} className={data.type === 'runner' ? 'text-blue-500' : 'text-yellow-500'} />
+        <Zap size={28} />
       </div>
-      <div className="text-sm font-semibold">{data.label}</div>
-      <div className="text-xs text-gray-500 mt-1">
-        {data.isConnected ? 'Connected' : 'Disconnected'}
+      <div className="text-sm font-bold text-gray-800 mb-1">{data.label}</div>
+      <div className={`text-xs px-3 py-1 rounded-full font-medium
+        ${data.isConnected ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
+        {data.isConnected ? 'Online' : 'Offline'}
       </div>
+
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="right"
+        style={{
+          background: data.type === 'runner' ? '#3b82f6' : '#eab308',
+          width: 10,
+          height: 10,
+          opacity: data.isConnected ? 1 : 0.5
+        }}
+      />
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="left"
+        style={{
+          background: data.type === 'runner' ? '#3b82f6' : '#eab308',
+          width: 10,
+          height: 10,
+          opacity: data.isConnected ? 1 : 0.5
+        }}
+      />
     </div>
   );
 };
@@ -50,235 +102,194 @@ const nodeTypes = {
   custom: CustomNode,
 };
 
-// Define nodes as a stable constant outside the component
-const NODES: Node[] = [
+const initialNodes: Node<CustomNodeData>[] = [
   {
     id: 'runner',
     type: 'custom',
-    data: {
-      label: 'Runner',
-      type: 'runner',
-      isConnected: false // will be updated in the component
-    },
-    position: { x: 250, y: 200 },
-    sourcePosition: Position.Right,
-    targetPosition: Position.Left,
-    style: { width: 150, height: 150 }
+    position: { x: 80, y: 200 },
+    data: { label: 'Protocol Runner', type: 'runner', isConnected: false },
+    draggable: true,
   },
   {
     id: 'ldk',
     type: 'custom',
-    data: {
-      label: 'LDK',
-      type: 'ldk',
-      isConnected: false // will be updated in the component
-    },
-    position: { x: 700, y: 200 },
-    sourcePosition: Position.Left,
-    targetPosition: Position.Right,
-    style: { width: 150, height: 150 }
+    position: { x: 520, y: 200 },
+    data: { label: 'LDK Node', type: 'ldk', isConnected: false },
+    draggable: true,
   },
 ];
 
-const MessageFlow: React.FC = () => {
-  const connected = useStore(state => state.connected);
-  const messages = useStore(state => state.messages);
-  const sendMessage = useStore(state => state.sendMessage);
-  const availableMessages = useStore(state => state.availableMessages);
-  const selectedMessage = useStore(state => state.selectedMessage);
-  const selectMessage = useStore(state => state.selectMessage);
-  const connect = useStore(state => state.connect);
-  const connectionState = useStore(state => state.connectionState);
-  const shouldBeConnected = useRef(false);
+const MessageFlowComponent: React.FC = () => {
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const { connected } = useStore();
 
   // State for raw message modal
   const [showRawMsgModal, setShowRawMsgModal] = useState(false);
   const [rawMsgType, setRawMsgType] = useState('');
   const [rawMsgContent, setRawMsgContent] = useState('');
 
-  // Animated message edge state
-  const [edges, setEdges] = useState<Edge[]>([]);
-  const [lastAnimatedId, setLastAnimatedId] = useState<string | null>(null);
-
-  // Permanent connection edge
-  const connectionEdge: Edge = {
-    id: 'connection',
+  // Base connection edge (no arrows, just a line)
+  const baseConnectionEdge: Edge = useMemo(() => ({
+    id: 'base-connection',
     source: 'runner',
     target: 'ldk',
     type: 'smoothstep',
-    label: (
-      <EdgeLabelRenderer>
-        <div style={{
-          position: 'absolute',
-          background: 'white',
-          padding: '4px 8px',
-          borderRadius: '4px',
-          fontSize: '12px',
-          fontWeight: 500,
-          color: '#666',
-          border: '1px solid #666',
-          zIndex: 1,
-        }}>
-          init
-        </div>
-      </EdgeLabelRenderer>
-    ),
+    animated: connected,
     style: {
-      strokeWidth: 2,
-      stroke: '#666',
-      strokeDasharray: '5 5',
-      zIndex: 1
-    }
-  };
+      strokeWidth: 3,
+      stroke: connected ? '#10b981' : '#d1d5db',
+      strokeDasharray: connected ? '0' : '8 4',
+    },
+    // No markerEnd to remove arrows
+    label: connected ? 'Lightning Network Connection' : 'Disconnected',
+    labelStyle: {
+      fontSize: '12px',
+      fontWeight: 600,
+      color: connected ? '#059669' : '#6b7280',
+    },
+    labelBgStyle: {
+      fill: 'white',
+      fillOpacity: 0.9,
+    },
+  }), [connected]);
 
-  // Always set the permanent connection edge on mount
+  // Update base connection edge when connection status changes
   useEffect(() => {
-    setEdges([connectionEdge]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    setEdges([baseConnectionEdge]);
+  }, [baseConnectionEdge, setEdges]);
 
-  // Animate new messages as temporary edges
+  // Update node connection status
   useEffect(() => {
-    if (!messages.length) return;
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage.id === lastAnimatedId) return;
+    setNodes((nds) =>
+      nds.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          isConnected: connected,
+        },
+      }))
+    );
+  }, [connected, setNodes]);
 
-    const newEdge: Edge = {
-      id: `message-${lastMessage.id}`,
-      source: lastMessage.from === 'runner' ? 'runner' : 'ldk',
-      target: lastMessage.to === 'runner' ? 'runner' : 'ldk',
-      type: 'smoothstep',
-      animated: true,
-      label: (
-        <EdgeLabelRenderer>
-          <div style={{
-            position: 'absolute',
-            background: 'white',
-            padding: '4px 8px',
-            borderRadius: '4px',
-            fontSize: '12px',
-            fontWeight: 700,
-            color: lastMessage.from === 'runner' ? '#3b82f6' : '#eab308',
-            border: `1px solid ${lastMessage.from === 'runner' ? '#3b82f6' : '#eab308'}`,
-            zIndex: 3,
-          }}>
-            {lastMessage.type}
-          </div>
-        </EdgeLabelRenderer>
-      ),
-      style: {
-        stroke: lastMessage.from === 'runner' ? '#3b82f6' : '#eab308',
-        strokeWidth: 3,
-        zIndex: 2
+  const onConnect = useCallback(
+    (params: Connection) => {
+      if (params.source && params.target) {
+        setEdges((eds) => addEdge({
+          ...params,
+          type: 'smoothstep',
+          animated: true,
+          style: { stroke: '#4CAF50', strokeWidth: 2 },
+          // No markerEnd to remove arrows
+        }, eds));
       }
-    };
+    },
+    [setEdges]
+  );
 
-    // Always include the permanent connection edge
-    setEdges([connectionEdge, newEdge]);
-    setLastAnimatedId(lastMessage.id);
-
-    // Remove the message edge after 2 seconds, keep the connection edge
-    const timeout = setTimeout(() => {
-      setEdges([connectionEdge]);
-    }, 2000);
-
-    return () => clearTimeout(timeout);
-  }, [messages, lastAnimatedId]);
-
-  // Poll for connection status only when we want to be connected
-  useEffect(() => {
-    if (!shouldBeConnected.current) return;
-
-    const pollStatus = async () => {
-      try {
-        const response = await fetch('http://localhost:5000/node-info');
-        const data = await response.json();
-        if (data.active_connections && data.active_connections > 0) {
-          useStore.getState().setConnectionState('connected');
-          useStore.setState({ connected: true });
-        } else {
-          useStore.getState().setConnectionState('disconnected');
-          useStore.setState({ connected: false });
-        }
-      } catch {
+  // Handle connection toggling
+  const handleConnectionToggle = useCallback(async () => {
+    try {
+      if (!connected) {
+        useStore.getState().setConnectionState('connecting');
+        await useStore.getState().connect();
+        console.log('Connection initiated');
+      } else {
+        apiClient.disconnect();
         useStore.getState().setConnectionState('disconnected');
-        useStore.setState({ connected: false });
+        setEdges([baseConnectionEdge]);
+        console.log('Connection terminated');
       }
-    };
+    } catch (error) {
+      console.error('Connection error:', error);
+      useStore.getState().setConnectionState('disconnected');
+    }
+  }, [connected, baseConnectionEdge, setEdges]);
 
-    const statusInterval = setInterval(pollStatus, 2000);
-    return () => clearInterval(statusInterval);
-  }, [shouldBeConnected.current]);
-
-  // Poll for messages when connected
+  // Handle WebSocket events and create animated message flows
   useEffect(() => {
-    if (!connected || !shouldBeConnected.current) return;
-
-    const pollMessages = async () => {
+    const handleMessage = (event: MessageFlowEvent) => {
       try {
-        const response = await fetch('/messages');
-        const data = await response.json();
-        if (data && data.messages) {
-          useStore.getState().setMessages(data.messages);
-        }
-      } catch (error) {
-        console.error('Error polling messages:', error);
+        const source = event.direction === 'out' ? 'runner' : 'ldk';
+        const target = event.direction === 'out' ? 'ldk' : 'runner';
+        const messageId = `message-${event.sequence_id || 'raw'}-${Date.now()}`;
+
+        const messageEdge: Edge = {
+          id: messageId,
+          source,
+          target,
+          type: 'smoothstep',
+          animated: true,
+          style: {
+            stroke: event.direction === 'out' ? '#3b82f6' : '#f59e0b',
+            strokeWidth: 4,
+          },
+          // No markerEnd to remove arrows
+          label: event.event,
+          labelStyle: {
+            fontSize: '11px',
+            fontWeight: 700,
+            color: 'white',
+            padding: '4px 8px',
+            borderRadius: '12px',
+            background: event.direction === 'out' ? '#3b82f6' : '#f59e0b',
+          },
+          labelBgStyle: {
+            fill: 'transparent',
+          },
+        };
+
+        // Add the message edge along with the base connection
+        setEdges([baseConnectionEdge, messageEdge]);
+
+        // Add message to store
+        useStore.getState().addMessage(event);
+
+        // Remove the message edge after 3 seconds
+        setTimeout(() => {
+          setEdges([baseConnectionEdge]);
+        }, 3000);
+      } catch (err) {
+        console.error('Error handling message:', err);
       }
     };
 
-    const messageInterval = setInterval(pollMessages, 2000);
-    return () => clearInterval(messageInterval);
-  }, [connected, shouldBeConnected.current]);
+    const unsubscribeMessage = apiClient.onMessage(handleMessage);
+    const unsubscribeError = apiClient.onError((error: { error: string }) => {
+      console.error('WebSocket error:', error);
+      useStore.getState().setConnectionState('disconnected');
+    });
 
-  // Handle raw message send
-  const handleRawMessageSend = async () => {
-    if (!connected) return;
+    return () => {
+      unsubscribeMessage();
+      unsubscribeError();
+    };
+  }, [baseConnectionEdge, setEdges]);
+
+  const handleSendMessage = useCallback(async () => {
+    if (!rawMsgType) {
+      return;
+    }
 
     try {
-      let content = {};
-      try {
-        content = JSON.parse(rawMsgContent);
-      } catch {
-        // If not valid JSON, use as is
-        content = { data: rawMsgContent };
+      let content: Record<string, unknown> = {};
+      if (rawMsgContent) {
+        try {
+          content = JSON.parse(rawMsgContent) as Record<string, unknown>;
+        } catch {
+          content = { data: rawMsgContent };
+        }
       }
 
-      await sendMessage(rawMsgType, content);
+      await apiClient.sendMessage(rawMsgType, content);
+
       setShowRawMsgModal(false);
       setRawMsgType('');
       setRawMsgContent('');
     } catch (error) {
-      console.error('Error sending raw message:', error);
+      console.error('Error sending message:', error);
     }
-  };
-
-  // Handle connect/disconnect
-  const handleConnectionToggle = async () => {
-    if (!connected) {
-      try {
-        shouldBeConnected.current = true;
-        await connect();
-      } catch (error) {
-        console.error('Connection error:', error);
-        shouldBeConnected.current = false;
-        useStore.getState().setConnectionState('disconnected');
-      }
-    } else {
-      shouldBeConnected.current = false;
-      useStore.getState().setConnectionState('disconnected');
-      useStore.setState({ connected: false });
-      useStore.getState().resetLogs();
-    }
-  };
-
-  // Use React.useMemo to update isConnected in node data without changing the array reference
-  const nodes = React.useMemo(() => NODES.map(node => ({
-    ...node,
-    data: {
-      ...node.data,
-      isConnected: connected
-    }
-  })), [connected]);
+  }, [rawMsgType, rawMsgContent]);
 
   return (
     <>
@@ -286,91 +297,87 @@ const MessageFlow: React.FC = () => {
         header={
           <Header
             variant="h2"
-            description="Visualization of message flow between nodes"
+            description="Real-time visualization of Lightning Network protocol messages"
             actions={
               <SpaceBetween direction="horizontal" size="xs">
                 <Button
                   onClick={handleConnectionToggle}
-                  loading={connectionState === 'connecting'}
-                  disabled={connectionState === 'connecting'}
+                  loading={useStore(state => state.connectionState) === 'connecting'}
+                  disabled={useStore(state => state.connectionState) === 'connecting'}
                   variant={connected ? "normal" : "primary"}
                 >
-                  {connectionState === 'connecting' ? 'Connecting...' :
+                  {useStore(state => state.connectionState) === 'connecting' ? 'Connecting...' :
                     connected ? 'Disconnect' : 'Connect'}
                 </Button>
                 {connected && (
-                  <SpaceBetween direction="horizontal" size="xs">
-                    <Button
-                      onClick={() => setShowRawMsgModal(true)}
-                      variant="normal"
-                    >
-                      Send Raw Message
-                    </Button>
-                    <Select
-                      selectedOption={selectedMessage ? {
-                        label: selectedMessage.name,
-                        value: selectedMessage.id
-                      } : null}
-                      onChange={({ detail }) => {
-                        const message = availableMessages.find(m => m.id === detail.selectedOption.value);
-                        selectMessage(message || null);
-                      }}
-                      options={availableMessages.map(msg => ({
-                        label: msg.name,
-                        value: msg.id,
-                        description: msg.description
-                      }))}
-                      placeholder="Select a message"
-                      filteringType="auto"
-                      empty="No messages available"
-                    />
-                    <Button
-                      onClick={async () => {
-                        if (selectedMessage && connected) {
-                          await sendMessage(selectedMessage.type, selectedMessage.content);
-                          selectMessage(null);
-                        }
-                      }}
-                      disabled={!selectedMessage}
-                      variant="primary"
-                    >
-                      Send Message
-                    </Button>
-                  </SpaceBetween>
+                  <Button
+                    onClick={() => setShowRawMsgModal(true)}
+                    variant="normal"
+                  >
+                    Send Message
+                  </Button>
                 )}
               </SpaceBetween>
             }
           >
-            Message Flow
+            Lightning Network Protocol Visualizer
           </Header>
         }
       >
         <SpaceBetween size="l">
-          <Box padding="l">
-            <div style={{ height: 600 }}>
+          {/* Flow Visualization */}
+          <Box>
+            <div style={{ height: '450px', border: '1px solid #e5e7eb', borderRadius: '8px', overflow: 'hidden' }}>
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
                 nodeTypes={nodeTypes}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
                 fitView
-                defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+                fitViewOptions={{
+                  padding: 0.2,
+                  minZoom: 0.8,
+                  maxZoom: 1.2
+                }}
                 minZoom={0.5}
-                maxZoom={1.5}
-                style={{ background: '#f8fafc' }}
+                maxZoom={2}
+                defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+                style={{
+                  background: 'linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%)'
+                }}
                 defaultEdgeOptions={{
                   type: 'smoothstep',
-                  animated: false
                 }}
+                nodesDraggable={true}
+                nodesConnectable={connected}
+                elementsSelectable={true}
               >
-                <Background color="#94a3b8" gap={16} />
-                <Controls />
+                <Background
+                  color="#cbd5e1"
+                  gap={20}
+                  size={1}
+                />
+                <Controls
+                  showZoom={true}
+                  showFitView={true}
+                  showInteractive={false}
+                />
               </ReactFlow>
             </div>
           </Box>
-          <MessageLog />
+
+          {/* Message Log Panel */}
+          {connected && (
+            <Box>
+              <MessageLog />
+            </Box>
+          )}
         </SpaceBetween>
       </Container>
 
+      {/* Raw Message Modal */}
       <Modal
         visible={showRawMsgModal}
         onDismiss={() => setShowRawMsgModal(false)}
@@ -380,30 +387,37 @@ const MessageFlow: React.FC = () => {
             <Button onClick={() => setShowRawMsgModal(false)} variant="link">
               Cancel
             </Button>
-            <Button onClick={handleRawMessageSend} variant="primary">
-              Send
+            <Button
+              onClick={handleSendMessage}
+              variant="primary"
+              disabled={!rawMsgType}
+            >
+              Send Message
             </Button>
           </SpaceBetween>
         }
-        className="wide-modal"
+        size="medium"
       >
         <SpaceBetween size="m">
-          <FormField label="Message Type">
+          <FormField
+            label="Message Type"
+            errorText={!rawMsgType ? "Message type is required" : undefined}
+          >
             <Input
               value={rawMsgType}
               onChange={({ detail }) => setRawMsgType(detail.value)}
-              placeholder="e.g., init"
+              placeholder="e.g., init, ping, pong"
             />
           </FormField>
           <FormField
-            label="Message Content"
-            description="Enter JSON content or plain text"
+            label="Message Content (Optional)"
+            description="Enter JSON content or leave empty for default"
           >
             <Textarea
               value={rawMsgContent}
               onChange={({ detail }) => setRawMsgContent(detail.value)}
               placeholder='e.g., {"globalfeatures": "", "features": ""}'
-              rows={5}
+              rows={6}
             />
           </FormField>
         </SpaceBetween>
@@ -411,5 +425,13 @@ const MessageFlow: React.FC = () => {
     </>
   );
 };
+
+function MessageFlow() {
+  return (
+    <ReactFlowProvider>
+      <MessageFlowComponent />
+    </ReactFlowProvider>
+  );
+}
 
 export default MessageFlow;

@@ -1,0 +1,15 @@
+Using version ^5.5.1 for flask-socketio
+
+Updating dependencies
+Resolving dependencies...
+
+Package operations: 6 installs, 0 updates, 0 removals
+
+  - Installing wsproto (1.2.0)
+  - Installing simple-websocket (1.1.0)
+  - Installing bidict (0.23.1)
+  - Installing python-engineio (4.12.2)
+  - Installing python-socketio (5.13.0)
+  - Installing flask-socketio (5.5.1)
+
+Writing lock file

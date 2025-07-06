@@ -1,44 +1,56 @@
-import axios from 'axios';
+import { webSocketService } from "./websocket";
 
-const API_BASE_URL = 'http://localhost:5000';
+const API_BASE_URL = "http://localhost:5000";
 
 export interface ConnectRequest {
-  sourcePrivkey?: string;
-  targetPrivkey?: string;
-  globalfeatures?: string;
-  features?: string;
+  node_id?: string;
 }
 
 export interface RawMessageRequest {
   type: string;
-  connprivkey: string;
-  content?: Record<string, any>;
-}
-
-export interface MessageResponse {
-  type: string;
-  content: {
-    globalfeatures: string;
-    features: string;
-  };
+  content?: Record<string, unknown>;
 }
 
 export interface ConnectResponse {
-  sent: MessageResponse;
-  received: MessageResponse;
+  status: string;
+  sequence_id: string;
+  node_id: string;
+  steps_completed: number;
+}
+
+export interface RawMessageResponse {
+  status: string;
+  message_type: string;
+  content: Record<string, unknown>;
 }
 
 const api = {
-  // Health check
-  checkHealth: () => axios.get(`${API_BASE_URL}/health`),
+  // Connect endpoint - runs Vincent's 7-step sequence
+  connect: (data: ConnectRequest = { node_id: "03" }) =>
+    fetch(`${API_BASE_URL}/connect`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+    }).then((res) => res.json() as Promise<ConnectResponse>),
 
-  // Connect two nodes and perform handshake
-  connect: (data: ConnectRequest) => 
-    axios.post<ConnectResponse>(`${API_BASE_URL}/connect`, data),
-
-  // Send a raw message
+  // Send raw message endpoint
   sendRawMessage: (data: RawMessageRequest) =>
-    axios.post<MessageResponse>(`${API_BASE_URL}/raw-msg`, data),
+    fetch(`${API_BASE_URL}/rawmsg`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+    }).then((res) => res.json() as Promise<RawMessageResponse>),
+
+  // WebSocket connection management
+  connectWebSocket: () => webSocketService.connect(),
+  runConnectSequence: (nodeId?: string) => webSocketService.runConnect(nodeId),
+  sendMessage: (type: string, content?: Record<string, unknown>) =>
+    webSocketService.sendRawMessage(type, content || {}),
+  disconnect: () => webSocketService.disconnect(),
 };
 
-export default api; 
+export default api;
