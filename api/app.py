@@ -65,7 +65,7 @@ def is_valid_hex(s):
 
 @app.route('/connect', methods=['POST'])
 def connect():
-    """Perform a full protocol handshake sequence as specified by Vincent"""
+    """Perform a full protocol handshake sequence as specified by Vincent (HTTP endpoint)"""
     try:
         global runner
         data = request.get_json() or {}
@@ -77,94 +77,8 @@ def connect():
         
         sequence_id = f'seq_{node_id}_{int(time.time())}'
         
-        # Vincent's exact sequence:
-        # 1. Connect to node 03
-        step1 = Connect(connprivkey="03")
-        broadcast_message({
-            'sequence_id': sequence_id,
-            'step': 1,
-            'direction': 'out',
-            'event': 'Connect',
-            'data': {'connprivkey': '03'},
-            'timestamp': int(time.time() * 1000)
-        })
-        
-        # 2. Expect init message
-        step2 = ExpectMsg("init")
-        broadcast_message({
-            'sequence_id': sequence_id,
-            'step': 2,
-            'direction': 'in',
-            'event': 'ExpectMsg',
-            'data': {'msgtype': 'init'},
-            'timestamp': int(time.time() * 1000)
-        })
-        
-        # 3. Send init message with global features
-        step3 = Msg("init", globalfeatures=runner.runner_features(globals=True))
-        broadcast_message({
-            'sequence_id': sequence_id,
-            'step': 3,
-            'direction': 'out',
-            'event': 'Msg',
-            'data': {'msgtype': 'init', 'globalfeatures': runner.runner_features(globals=True)},
-            'timestamp': int(time.time() * 1000)
-        })
-        
-        # 4. Disconnect
-        step4 = Disconnect()
-        broadcast_message({
-            'sequence_id': sequence_id,
-            'step': 4,
-            'direction': 'out',
-            'event': 'Disconnect',
-            'data': {},
-            'timestamp': int(time.time() * 1000)
-        })
-        
-        # 5. Connect to node 02
-        step5 = Connect(connprivkey="02")
-        broadcast_message({
-            'sequence_id': sequence_id,
-            'step': 5,
-            'direction': 'out',
-            'event': 'Connect',
-            'data': {'connprivkey': '02'},
-            'timestamp': int(time.time() * 1000)
-        })
-        
-        # 6. Expect init message again
-        step6 = ExpectMsg("init")
-        broadcast_message({
-            'sequence_id': sequence_id,
-            'step': 6,
-            'direction': 'in',
-            'event': 'ExpectMsg',
-            'data': {'msgtype': 'init'},
-            'timestamp': int(time.time() * 1000)
-        })
-        
-        # 7. Send init message with additional features
-        step7 = Msg("init", globalfeatures=runner.runner_features(globals=True, additional_features=[99]))
-        broadcast_message({
-            'sequence_id': sequence_id,
-            'step': 7,
-            'direction': 'out',
-            'event': 'Msg',
-            'data': {
-                'msgtype': 'init', 
-                'globalfeatures': runner.runner_features(globals=True, additional_features=[99])
-            },
-            'timestamp': int(time.time() * 1000)
-        })
-        
-        # Broadcast sequence completion
-        broadcast_message({
-            'sequence_id': sequence_id,
-            'event': 'sequence_complete',
-            'total_steps': 7,
-            'timestamp': int(time.time() * 1000)
-        })
+        # Execute the sequence using the extracted function
+        execute_connect_sequence(sequence_id, node_id)
         
         return jsonify({
             'status': 'success',
@@ -237,6 +151,170 @@ def handle_connect():
 def handle_disconnect():
     """Handle WebSocket client disconnection"""
     logger.info("WebSocket client disconnected")
+
+@socketio.on('start_connect_sequence')
+def handle_start_connect_sequence(data):
+    """Handle WebSocket-based connect sequence request"""
+    try:
+        global runner
+        node_id = data.get('node_id', '03')
+        
+        # Initialize runner
+        config = MockConfig()
+        runner = DummyRunner(config)
+        
+        sequence_id = f'seq_{node_id}_{int(time.time())}'
+        
+        # Execute Vincent's 7-step sequence via WebSocket
+        execute_connect_sequence(sequence_id, node_id)
+        
+        # Emit completion
+        emit('sequence_complete', {
+            'sequence_id': sequence_id,
+            'node_id': node_id,
+            'steps_completed': 7
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in WebSocket connect: {str(e)}")
+        emit('error', {'error': str(e)})
+
+@socketio.on('send_raw_message')
+def handle_send_raw_message(data):
+    """Handle WebSocket-based raw message sending"""
+    try:
+        global runner
+        msg_type = data.get('type')
+        content = data.get('content', {})
+        
+        if not msg_type:
+            emit('error', {'error': 'Message type is required'})
+            return
+        
+        # Initialize runner if not exists
+        if not runner:
+            config = MockConfig()
+            runner = DummyRunner(config)
+        
+        # Create and send the message
+        msg = Msg(msg_type, **content)
+        
+        # Broadcast the message
+        message_data = {
+            'direction': 'out',
+            'event': 'RawMsg',
+            'data': {
+                'msgtype': msg_type,
+                **content
+            },
+            'timestamp': int(time.time() * 1000)
+        }
+        
+        broadcast_message(message_data)
+        
+        # Emit success response
+        emit('message_sent', {
+            'status': 'success',
+            'message_type': msg_type,
+            'content': content
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in WebSocket rawmsg: {str(e)}")
+        emit('error', {'error': str(e)})
+
+def execute_connect_sequence(sequence_id, node_id):
+    """Execute Vincent's 7-step sequence (extracted for reuse)"""
+    global runner
+    
+    # Vincent's exact sequence:
+    # 1. Connect to node 03
+    step1 = Connect(connprivkey="03")
+    broadcast_message({
+        'sequence_id': sequence_id,
+        'step': 1,
+        'direction': 'out',
+        'event': 'Connect',
+        'data': {'connprivkey': '03'},
+        'timestamp': int(time.time() * 1000)
+    })
+    
+    # 2. Expect init message
+    step2 = ExpectMsg("init")
+    broadcast_message({
+        'sequence_id': sequence_id,
+        'step': 2,
+        'direction': 'in',
+        'event': 'ExpectMsg',
+        'data': {'msgtype': 'init'},
+        'timestamp': int(time.time() * 1000)
+    })
+    
+    # 3. Send init message with global features
+    step3 = Msg("init", globalfeatures=runner.runner_features(globals=True))
+    broadcast_message({
+        'sequence_id': sequence_id,
+        'step': 3,
+        'direction': 'out',
+        'event': 'Msg',
+        'data': {'msgtype': 'init', 'globalfeatures': runner.runner_features(globals=True)},
+        'timestamp': int(time.time() * 1000)
+    })
+    
+    # 4. Disconnect
+    step4 = Disconnect()
+    broadcast_message({
+        'sequence_id': sequence_id,
+        'step': 4,
+        'direction': 'out',
+        'event': 'Disconnect',
+        'data': {},
+        'timestamp': int(time.time() * 1000)
+    })
+    
+    # 5. Connect to node 02
+    step5 = Connect(connprivkey="02")
+    broadcast_message({
+        'sequence_id': sequence_id,
+        'step': 5,
+        'direction': 'out',
+        'event': 'Connect',
+        'data': {'connprivkey': '02'},
+        'timestamp': int(time.time() * 1000)
+    })
+    
+    # 6. Expect init message again
+    step6 = ExpectMsg("init")
+    broadcast_message({
+        'sequence_id': sequence_id,
+        'step': 6,
+        'direction': 'in',
+        'event': 'ExpectMsg',
+        'data': {'msgtype': 'init'},
+        'timestamp': int(time.time() * 1000)
+    })
+    
+    # 7. Send init message with additional features
+    step7 = Msg("init", globalfeatures=runner.runner_features(globals=True, additional_features=[99]))
+    broadcast_message({
+        'sequence_id': sequence_id,
+        'step': 7,
+        'direction': 'out',
+        'event': 'Msg',
+        'data': {
+            'msgtype': 'init', 
+            'globalfeatures': runner.runner_features(globals=True, additional_features=[99])
+        },
+        'timestamp': int(time.time() * 1000)
+    })
+    
+    # Broadcast sequence completion
+    broadcast_message({
+        'sequence_id': sequence_id,
+        'event': 'sequence_complete',
+        'total_steps': 7,
+        'timestamp': int(time.time() * 1000)
+    })
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, host='0.0.0.0', port=5000)
